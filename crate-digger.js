@@ -1207,6 +1207,20 @@
     return out;
   }
 
+  // src/domain/emptyState.ts
+  function emptyState(s2) {
+    if (s2.visible > 0) return null;
+    if (s2.tracks > 0) return { title: "No track matches the filters" };
+    if (s2.error) return { title: `Error: ${s2.error}` };
+    if (s2.library === "loading")
+      return {
+        title: "Reading your library\u2026",
+        detail: "This happens once after Spotify starts, so tracks you already have can be hidden."
+      };
+    if (s2.exhausted) return { title: "No recommendations for this playlist" };
+    return { title: "Loading recommendations\u2026" };
+  }
+
   // src/domain/keys.ts
   var SEEK_MS = 1e4;
   var SHORTCUT_LEGEND = [
@@ -1897,6 +1911,9 @@
 .prr-th-btn:hover { color: var(--spice-text); text-decoration: underline; }\r
 .prr-columns-section { margin-top: 4px; border-top: 1px solid rgba(var(--spice-rgb-text, 255, 255, 255), 0.1); padding-top: 10px; }\r
 .prr-columns-hint { margin-left: auto; padding-left: 12px; font-size: 11px; color: var(--spice-subtext); }\r
+\r
+.prr-empty-title { font-size: 16px; color: var(--spice-text); }\r
+.prr-empty-detail { margin-top: 6px; font-size: 13px; color: var(--spice-subtext); }\r
 `;
   document.head.appendChild(s);
 
@@ -2004,9 +2021,17 @@
       overscan: OVERSCAN
     });
     const available = availableTracks(s2.tracks, ctx).length;
-    const firstLoad = s2.loading && s2.tracks.length === 0;
+    const busy = s2.loading || library.status === "loading";
+    const empty2 = emptyState({
+      tracks: s2.tracks.length,
+      visible: visible.length,
+      loading: s2.loading,
+      exhausted: s2.exhausted,
+      error: s2.error,
+      library: library.status
+    });
     const libraryNote = library.status === "loading" ? " \xB7 reading your library\u2026" : library.status === "error" ? " \xB7 couldn't read your library" : "";
-    return /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-root" }, !s2.editable && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-warning" }, "Read-only: you can't add tracks to this playlist"), /* @__PURE__ */ Spicetify.React.createElement(FiltersBar, { uri, filters: s2.filters }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-counter" }, visible.length, " shown / ", available, " loaded", libraryNote), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar-actions" }, /* @__PURE__ */ Spicetify.React.createElement(ShortcutsMenu, { enabled: shortcutsOn }), /* @__PURE__ */ Spicetify.React.createElement(ColumnsMenu, { visible: columnIds, keyNotation }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-list", ref: listRef }, firstLoad && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty" }, "Loading recommendations\u2026"), !s2.loading && s2.tracks.length === 0 && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty" }, s2.error ? `Error: ${s2.error}` : "No recommendations for this playlist"), s2.tracks.length > 0 && visible.length === 0 && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty" }, "No track matches the filters"), visible.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("table", { className: "prr-table", style: { width: widths.reduce((a, b) => a + b, 0) } }, /* @__PURE__ */ Spicetify.React.createElement("colgroup", null, /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[0] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[1] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[2] } }), columns2.map((c, i) => /* @__PURE__ */ Spicetify.React.createElement("col", { key: c.id, style: { width: widths[3 + i] } }))), /* @__PURE__ */ Spicetify.React.createElement("thead", null, /* @__PURE__ */ Spicetify.React.createElement("tr", null, /* @__PURE__ */ Spicetify.React.createElement("th", { "aria-label": "Add" }), /* @__PURE__ */ Spicetify.React.createElement("th", { colSpan: 2 }, "Title"), columns2.map((c) => /* @__PURE__ */ Spicetify.React.createElement("th", { key: c.id, className: c.numeric ? "prr-num" : void 0 }, c.id === "key" ? (
+    return /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-root" }, !s2.editable && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-warning" }, "Read-only: you can't add tracks to this playlist"), /* @__PURE__ */ Spicetify.React.createElement(FiltersBar, { uri, filters: s2.filters }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-counter" }, visible.length, " shown / ", available, " loaded", libraryNote), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar-actions" }, /* @__PURE__ */ Spicetify.React.createElement(ShortcutsMenu, { enabled: shortcutsOn }), /* @__PURE__ */ Spicetify.React.createElement(ColumnsMenu, { visible: columnIds, keyNotation }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-list", ref: listRef }, empty2 && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty-title" }, empty2.title), empty2.detail && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty-detail" }, empty2.detail)), visible.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("table", { className: "prr-table", style: { width: widths.reduce((a, b) => a + b, 0) } }, /* @__PURE__ */ Spicetify.React.createElement("colgroup", null, /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[0] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[1] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[2] } }), columns2.map((c, i) => /* @__PURE__ */ Spicetify.React.createElement("col", { key: c.id, style: { width: widths[3 + i] } }))), /* @__PURE__ */ Spicetify.React.createElement("thead", null, /* @__PURE__ */ Spicetify.React.createElement("tr", null, /* @__PURE__ */ Spicetify.React.createElement("th", { "aria-label": "Add" }), /* @__PURE__ */ Spicetify.React.createElement("th", { colSpan: 2 }, "Title"), columns2.map((c) => /* @__PURE__ */ Spicetify.React.createElement("th", { key: c.id, className: c.numeric ? "prr-num" : void 0 }, c.id === "key" ? (
       // Click to switch notation (Musical → Camelot → Open Key)
       /* @__PURE__ */ Spicetify.React.createElement("button", { className: "prr-th-btn", title: "Click to change the key notation", onClick: cycleKeyNotation }, "Key \xB7 ", KEY_NOTATIONS.find((n) => n.id === keyNotation)?.label)
     ) : c.label)))), /* @__PURE__ */ Spicetify.React.createElement("tbody", null, range.start > 0 && /* @__PURE__ */ Spicetify.React.createElement("tr", { className: "prr-spacer", "aria-hidden": "true", style: { height: range.start * ROW_HEIGHT } }, /* @__PURE__ */ Spicetify.React.createElement("td", { colSpan: widths.length })), visible.slice(range.start, range.end).map((t) => /* @__PURE__ */ Spicetify.React.createElement(
@@ -2029,7 +2054,7 @@
       "button",
       {
         className: "prr-btn prr-btn-secondary",
-        disabled: s2.loading,
+        disabled: busy,
         onClick: () => {
           resetSession(uri);
           resetExtras(uri);
@@ -2038,7 +2063,7 @@
         }
       },
       "Restart"
-    ), /* @__PURE__ */ Spicetify.React.createElement("button", { className: "prr-btn", disabled: s2.loading || s2.exhausted, onClick: () => void startLoad(uri) }, s2.loading ? "Loading\u2026" : s2.exhausted ? "No more tracks" : "Load more")));
+    ), /* @__PURE__ */ Spicetify.React.createElement("button", { className: "prr-btn", disabled: busy || s2.exhausted, onClick: () => void startLoad(uri) }, busy ? "Loading\u2026" : s2.exhausted ? "No more tracks" : "Load more")));
   }
 
   // src/ui/openRecommender.tsx
