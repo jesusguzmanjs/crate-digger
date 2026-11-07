@@ -1,62 +1,63 @@
 # Crate Digger
 
-A [Spicetify](https://spicetify.app) extension for digging up new tracks for a playlist without pressing
-"Refresh" twenty times. It opens a popup over the playlist with hundreds of recommendations that sound like it,
-and lets you add them straight to that same playlist.
+An extension for [Spicetify](https://spicetify.app) that allows you to find new tracks to add to your playlist.
+A popup will appear when opening the extension, allowing you to browse hundreds of recommendations based on your
+playlist and easily add them to it.
 
 ![Crate Digger](preview.png)
 
-## What it does
+## Functionality
 
-- **Far more recommendations.** Mixes the playlist's own recommendations with Spotify's autoplay, top tracks
-  of related artists and playlists your artists were discovered on. **Load more** keeps digging.
-- **Filtered by genre and by sound.** Extra sources only get in if their genres resemble the playlist's; then
-  every candidate is compared with the playlist by **timbre and punch** (from Spotify's audio analysis). Each
-  **Load more** searches until 40 tracks pass your filters and sound like the playlist — the profile follows the
-  playlist's 100 most recently added tracks, so it keeps up with the direction it's taking.
-- **Filters based on your account.** Hide artists already in the playlist, tracks you already have (your
-  playlists and liked songs), artists you already have, or show one track per artist (a collaboration counts as
-  its own artist). Tracks already in the playlist never show up.
-- **Track data.** Genres (with their confidence on hover), plays, key, BPM, release date and duration. Pick the
-  columns you want under **Columns**; widths adapt to the space. Keys can be shown as **Musical** (Am), **Camelot**
-  (8A) or **Open Key** (1m) — click the Key column header to switch.
-- **Built for DJ-style digging.** The playing track is highlighted, and keyboard shortcuts let you seek, move
-  through the list, play and add without touching the mouse.
-- **State is kept.** Close and reopen the popup: loaded tracks, filters and scroll position are still there.
-  The button turns green on playlists with an open session.
-- **Restart shuffles.** Every **Restart** brings different tracks instead of the same ones again.
+- **More recommendations!** Recommendations are made by combining your playlist's recommended tracks with other
+  Spotify sources: autoplay, top tracks from related artists and playlists your artists were discovered on.
+  **Load More** keeps digging for you.
+- **Filtered by genre & sound.** Extra sources only make it in if they match your playlist's genres. All
+  recommendations are then filtered so they match your playlist by **timbre and punch** (from Spotify's audio
+  analysis). **Load More** keeps searching until 40 tracks have passed your filters and match your playlist. The
+  profile is based on the last 100 tracks added to your playlist, so it reflects the direction your playlist is going.
+- **Filtered based on your account.** You can hide artists already in your playlist, tracks you already have (in your
+  playlists / liked songs), artists you already have, or show only one track per artist (a collaboration counts as an
+  artist of its own). Tracks already in your playlist never appear.
+- **Track info.** Genre (hover to see confidence levels), Plays, Key, BPM, Release Date and Duration. Choose which
+  columns to show in the **Columns** menu; column widths resize to fit the available space. Keys can be displayed in
+  Musical (Am), Camelot (8A) or Open Key (1m) format — click the **Key** column heading to change.
+- **Designed for DJs.** The currently playing track is highlighted. Keyboard shortcuts let you seek, move through the
+  list, play and add tracks without using the mouse.
+- **Persistent.** When you close the popup and re-open it, all previously loaded tracks, filters and scroll position
+  remain. The button turns green on playlists with an active session.
+- **Randomised.** Every time you press **Restart**, different tracks are shown.
 
-## Install
+## Installation
 
-You need the Spotify desktop app with [Spicetify installed](https://spicetify.app/docs/getting-started).
+You will need the Spotify desktop application and [Spicetify](https://spicetify.app/docs/getting-started).
 
-### From the Spicetify Marketplace
+### Via Spicetify Marketplace
 
-Open **Marketplace** in Spotify, search for **Crate Digger** and install it.
+Open the **Marketplace** in Spotify and search for **Crate Digger**. Click **Install**.
 
-### Manually
+### Manual
 
 1. Download [`crate-digger.js`](crate-digger.js).
-2. Copy it into Spicetify's extensions folder:
+2. Place it in the extensions folder:
    - **Windows:** `%APPDATA%\spicetify\Extensions`
    - **macOS / Linux:** `~/.config/spicetify/Extensions`
 
-   Not sure where it is? `spicetify path userdata` prints Spicetify's folder; extensions go in its
-   `Extensions` subfolder.
-3. Enable it and apply:
+   If unsure, type `spicetify path userdata` into a terminal to see where your Spicetify folder is, and place the
+   extension in its `Extensions` subfolder.
+3. Enable & apply:
 
    ```bash
    spicetify config extensions crate-digger.js
    spicetify apply
    ```
 
-Spotify restarts and, on your playlists, a new button (a vinyl record) shows up next to shuffle and download.
+Spotify will reload. A new button (a vinyl record) will appear next to Shuffle & Download on your playlists.
 
-### Update
+### Updating
 
-Replace `crate-digger.js` in the extensions folder with the new version and run `spicetify apply`.
+Replace the `crate-digger.js` file in the extensions folder, then run `spicetify apply`.
 
-### Uninstall
+### Uninstalling
 
 ```bash
 spicetify config extensions crate-digger.js-
@@ -66,35 +67,36 @@ spicetify apply
 ## Usage
 
 1. Open a playlist in Spotify.
-2. Press **F8**, click the **Crate Digger** button next to the play button (on playlists you own), or
-   right-click the playlist → **Crate Digger**.
-3. Click a row to listen; **+** adds it to the playlist (only on playlists you can edit).
-4. **Load more** to keep digging, **Restart** to start over with different tracks.
+2. Press **F8**, or click the **Crate Digger** button next to the play button (only appears on playlists you own),
+   or right-click the playlist → **Crate Digger**.
+3. Click a row to play it. Click **+** to add it to your playlist (only works on playlists you can edit).
+4. Click **Load More** to continue digging. Click **Restart** to begin again with different tracks.
 
-**Keyboard shortcuts** (while the popup is open; switch them on/off in the **Shortcuts** menu):
+**Keyboard shortcuts** (while the popup is open; toggle them on/off in the **Shortcuts** menu):
 
-| Key | Action |
+| Key | Function |
 |---|---|
-| **← / →** | Seek back / forward 10 s |
-| **↑ / ↓** | Move through the list |
-| **Enter** | Play / pause the selected track |
-| **A** | Add the selected track to the playlist |
+| ← / → | Seek back / forward 10 s |
+| ↑ / ↓ | Move the selection through the list |
+| Enter | Play / pause the selected track |
+| A | Add the selected track to your playlist |
 
-The first time you open it after starting Spotify it takes a few seconds: it reads your library to know which
-tracks and artists you already have. Nothing is sent outside Spotify.
+When opened for the first time after Spotify starts, it takes a few seconds to load: it scans your library to
+identify the tracks and artists you already have. No data is sent outside of Spotify.
 
 ## Troubleshooting
 
-- **Spotify updated and the extension is gone.** Spotify updates remove Spicetify. Run `spicetify backup apply`.
-- **Some column is empty or fewer tracks show up.** The extension relies on Spotify's internal APIs, which can
-  change with an update. Whatever fails shows as "—" and the rest keeps working.
+- **Spotify has been updated and the extension is missing.** Spotify updates remove Spicetify. Run
+  `spicetify backup apply`.
+- **Some columns are blank or fewer tracks appear.** The extension uses internal Spotify APIs, which may change when
+  Spotify updates. Anything affected shows as "—" and everything else should keep working.
 
 
 ## Credits
 
-Reading Spotify's native track genres, and the key/BPM/energy data, were inspired by
-[Sort Play](https://github.com/hoeci/sort-play) (MIT).
+Inspired by [Sort Play](https://github.com/hoeci/sort-play) (MIT) for reading Spotify's native track genre, key and
+BPM information.
 
-## License
+## Licence
 
 [MIT](LICENSE)
