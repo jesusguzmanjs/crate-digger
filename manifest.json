@@ -1,0 +1,20 @@
+{
+  "name": "Crate Digger",
+  "description": "Dig far deeper than Spotify's playlist recommendations: hundreds of tracks from several sources, filtered by the playlist's genres and by how they sound (timbre and punch), plus your own library. Key (Musical, Camelot or Open Key), BPM, plays, keyboard shortcuts, and one-click add to the playlist.",
+  "preview": "cover.png",
+  "main": "crate-digger.js",
+  "readme": "README.md",
+  "authors": [
+    {
+      "name": "jesusguzmanjs",
+      "url": "https://github.com/jesusguzmanjs"
+    }
+  ],
+  "tags": [
+    "playlist",
+    "recommendations",
+    "discovery",
+    "bpm",
+    "dj"
+  ]
+}
