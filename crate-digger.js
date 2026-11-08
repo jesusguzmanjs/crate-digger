@@ -130,7 +130,7 @@
       updateSession(uri, { error: e instanceof Error ? e.message : String(e) });
       throw e;
     } finally {
-      updateSession(uri, { loading: false });
+      updateSession(uri, { loading: false, digProgress: void 0 });
     }
   }
   function mergeMeta(uri, meta) {
@@ -159,6 +159,8 @@
   var ACTIONS_SELECTOR = 'main [data-testid="action-bar-row-actions"]';
   var LABEL = "Crate Digger (F8)";
   var CRATE_ICON = `<svg role="img" aria-hidden="true" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g fill="none" style="fill:none"><circle cx="12" cy="12" r="10"/><path d="M14.22 5.89A6.5 6.5 0 0 1 18.11 9.78"/><path d="M9.78 18.11A6.5 6.5 0 0 1 5.89 14.22"/><circle cx="12" cy="12" r="2.5"/></g></svg>`;
+  var CONTEXT_MENU_ICON_NAME = "crate-digger";
+  var CONTEXT_MENU_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><g fill="none" style="fill:none"><circle cx="12" cy="12" r="10"/><path d="M14.22 5.89A6.5 6.5 0 0 1 18.11 9.78"/><path d="M9.78 18.11A6.5 6.5 0 0 1 5.89 14.22"/><circle cx="12" cy="12" r="2.5"/></g></svg>`;
   var owned = /* @__PURE__ */ new Map();
   function isOwnPlaylist(metadata) {
     return metadata?.isOwnedBySelf === true;
@@ -281,9 +283,11 @@
     trackUris.forEach((t) => into.collectionTrackUris.add(t));
     artistUris.forEach((a) => into.collectionArtistUris.add(a));
   }
-  async function loadOwnPlaylists(into) {
+  async function loadOwnPlaylists(into, progress, report) {
     const root = await Spicetify.Platform.RootlistAPI.getContents();
     const queue = ownPlaylistUris(root?.items ?? []);
+    progress.total = queue.length;
+    report();
     const worker = async () => {
       for (let uri = queue.shift(); uri; uri = queue.shift()) {
         try {
@@ -292,21 +296,27 @@
         } catch (e) {
           console.warn("[crate-digger] could not read playlist", uri, e);
         }
+        progress.done++;
+        report();
       }
     };
     await Promise.all(Array.from({ length: PLAYLIST_CONCURRENCY }, worker));
   }
-  async function loadLiked(into) {
+  async function loadLiked(into, progress, report) {
     for (let offset = 0; ; offset += LIKED_PAGE) {
       const page = await Spicetify.Platform.LibraryAPI.getTracks({ limit: LIKED_PAGE, offset });
       const items = page?.items ?? [];
       collect(items, into);
+      progress.liked += items.length;
+      report();
       if (items.length < LIKED_PAGE) break;
     }
   }
-  async function loadLibraryData() {
+  async function loadLibraryData(onProgress) {
     const data = { collectionTrackUris: /* @__PURE__ */ new Set(), collectionArtistUris: /* @__PURE__ */ new Set() };
-    await Promise.all([loadOwnPlaylists(data), loadLiked(data)]);
+    const progress = { total: 0, done: 0, liked: 0 };
+    const report = () => onProgress?.({ playlistsDone: progress.done, playlistsTotal: progress.total, likedSongs: progress.liked });
+    await Promise.all([loadOwnPlaylists(data, progress, report), loadLiked(data, progress, report)]);
     return data;
   }
 
@@ -329,10 +339,12 @@
   function ensureLibrary(loader) {
     if (state.status === "ready") return Promise.resolve();
     if (pending) return pending;
-    set({ ...state, status: "loading" });
-    pending = loader().then((data) => set({ ...data, status: "ready" })).catch((e) => {
+    set({ ...state, status: "loading", progress: void 0 });
+    pending = loader((progress) => {
+      if (state.status === "loading") set({ ...state, progress });
+    }).then((data) => set({ ...data, status: "ready" })).catch((e) => {
       console.error("[crate-digger] library load failed", e);
-      set({ ...state, status: "error" });
+      set({ ...state, status: "error", progress: void 0 });
     }).finally(() => {
       pending = null;
     });
@@ -411,9 +423,17 @@
       for (const t of viable) (visible.has(t.uri) && added + show.length < deps.target ? show : rest).push(t);
       if (show.length) deps.append(show);
       added += show.length;
+      deps.onProgress?.(added, deps.target);
       return rest;
     };
+    deps.onProgress?.(0, deps.target);
     s2.ready = take(s2.ready);
+    if (added < deps.target && fetches < deps.maxFetches && deps.boostPending?.()) {
+      const known = /* @__PURE__ */ new Set([...deps.shownUris(), ...s2.pool.map((t) => t.uri), ...s2.analysed]);
+      const fresh = (await deps.fetchCandidates(known)).filter((t) => !known.has(t.uri));
+      fetches++;
+      s2.pool.unshift(...fresh);
+    }
     while (added < deps.target && blocks < deps.maxBlocks) {
       const eligible = pendingVisible();
       if (eligible.length < deps.block && !s2.sourcesDone && fetches < deps.maxFetches) {
@@ -443,102 +463,31 @@
   function warmTimbreProfile(playlistUri, deps) {
     void modelFor(stateOf(playlistUri), deps);
   }
+  function invalidateTimbreProfile(playlistUri) {
+    const s2 = states.get(playlistUri);
+    if (s2) s2.model = void 0;
+  }
   function resetDigger(playlistUri) {
     const s2 = states.get(playlistUri);
     if (s2) states.set(playlistUri, { pool: [], analysed: /* @__PURE__ */ new Set(), ready: [], sourcesDone: false, model: s2.model });
   }
 
-  // src/domain/genreFit.ts
-  var FIT_PERCENTILE = 0.25;
-  function normalise(v) {
-    let n = 0;
-    v.forEach((x) => n += x * x);
-    n = Math.sqrt(n);
-    if (!n) return /* @__PURE__ */ new Map();
-    return new Map([...v].map(([k, x]) => [k, x / n]));
-  }
-  function buildProfile(lists) {
-    const sum = /* @__PURE__ */ new Map();
-    for (const list of lists) for (const g of list) sum.set(g.name, (sum.get(g.name) ?? 0) + g.score);
-    return normalise(sum);
-  }
-  function similarity(profile, genres2) {
-    if (!profile.size || !genres2?.length) return null;
-    const v = normalise(new Map(genres2.map((g) => [g.name, g.score])));
-    if (!v.size) return null;
-    let s2 = 0;
-    v.forEach((x, k) => s2 += x * (profile.get(k) ?? 0));
-    return s2;
-  }
-  function fitThreshold(profile, lists) {
-    const sims = lists.map((l) => similarity(profile, l)).filter((x) => x !== null).sort((a, b) => a - b);
-    if (!sims.length) return null;
-    return sims[Math.min(sims.length - 1, Math.floor(FIT_PERCENTILE * sims.length))];
-  }
-  function keepFitting(tracks, genresOf, profile, threshold) {
-    if (threshold === null) return tracks;
-    return tracks.filter((t) => (similarity(profile, genresOf(t.uri)) ?? -1) >= threshold);
-  }
-  function orderBySimilarity(tracks, genresOf, profile) {
-    return tracks.map((t, i) => ({ t, i, s: similarity(profile, genresOf(t.uri)) })).sort((a, b) => (b.s ?? -1) - (a.s ?? -1) || a.i - b.i).map((x) => x.t);
-  }
-
-  // src/api/recommendations.ts
-  var PER_ROUND = 50;
-  var PITCH = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-  function standardKeyToPitch(k) {
-    const m = /^([A-G])([#♯b♭]?)$/.exec(k?.trim() ?? "");
-    if (!m) return void 0;
-    const shift = m[2] === "#" || m[2] === "\u266F" ? 1 : m[2] === "b" || m[2] === "\u266D" ? -1 : 0;
-    return (PITCH[m[1]] + shift + 12) % 12;
-  }
-  function parseRecommendations(raw) {
-    const tracks = [];
-    const v2Meta = /* @__PURE__ */ new Map();
-    for (const r of Array.isArray(raw) ? raw : []) {
-      if (!r?.uri?.startsWith("spotify:track:") || !r.id) continue;
-      tracks.push({
-        uri: r.uri,
-        id: r.id,
-        name: r.name ?? "",
-        artists: (r.artists ?? []).map((a) => ({ uri: a.uri ?? "", name: a.name ?? "" })),
-        album: { name: r.album?.name ?? "", imageUrl: r.album?.imageUrl },
-        durationMs: r.duration ?? 0
-      });
-      const meta = {};
-      if (typeof r.bpm === "number" && r.bpm > 0) meta.tempo = r.bpm;
-      const pitch = r.trackKey?.standardKey ? standardKeyToPitch(r.trackKey.standardKey) : void 0;
-      if (pitch !== void 0 && (r.trackKey?.mode === "major" || r.trackKey?.mode === "minor")) {
-        meta.key = pitch;
-        meta.mode = r.trackKey.mode === "major" ? 1 : 0;
-      }
-      if (Object.keys(meta).length) v2Meta.set(r.uri, meta);
-    }
-    return { tracks, v2Meta };
-  }
-  var idOf = (uri) => uri.split(":").pop();
-  async function fetchRecommendationBatch(playlistUri, exclude, rounds = 5, onV2Meta) {
-    const skip = new Set([...exclude].filter((u) => u.startsWith("spotify:track:")).map(idOf));
+  // src/domain/blend.ts
+  function blend(main2, boost, share) {
     const out = [];
-    for (let i = 0; i < rounds; i++) {
-      let raw;
-      try {
-        raw = await Spicetify.Platform.PlaylistAPI.getRecommendedTracks(playlistUri, [...skip], PER_ROUND, {
-          decorateWithBpmAndKey: true
-        });
-      } catch (e) {
-        if (i === 0) throw e;
-        console.warn("[crate-digger] recommendation round failed", e);
-        break;
-      }
-      const { tracks, v2Meta } = parseRecommendations(raw);
-      const fresh = tracks.filter((t) => !skip.has(t.id));
-      fresh.forEach((t) => skip.add(t.id));
-      out.push(...fresh);
-      if (v2Meta.size) onV2Meta?.(v2Meta);
-      if (fresh.length === 0) break;
+    let mi = 0;
+    let bi = 0;
+    let boosted = 0;
+    while (mi < main2.length) {
+      if (bi < boost.length && boosted < share * (out.length + 1)) {
+        out.push(boost[bi++]);
+        boosted++;
+      } else out.push(main2[mi++]);
     }
-    return out;
+    return out.concat(boost.slice(bi));
+  }
+  function newSeeds(added, used, n) {
+    return [...added].reverse().filter((u) => !used.has(u)).slice(0, n);
   }
 
   // src/api/sources.ts
@@ -559,7 +508,7 @@
     value: null
   };
   var isTrackUri = (u) => typeof u === "string" && u.startsWith("spotify:track:");
-  var idOf2 = (uri) => uri.split(":").pop();
+  var idOf = (uri) => uri.split(":").pop();
   function spotifyImageUrl(u) {
     if (!u) return void 0;
     return u.startsWith("spotify:image:") ? `https://i.scdn.co/image/${u.slice("spotify:image:".length)}` : u;
@@ -572,7 +521,7 @@
       const artistUri = t.artist_uri ?? m.artist_uri;
       out.push({
         uri: t.uri,
-        id: idOf2(t.uri),
+        id: idOf(t.uri),
         name: m.title ?? t.name ?? "",
         artists: artistUri ? [{ uri: artistUri, name: m.artist_name ?? "" }] : [],
         album: { name: m.album_title ?? "", imageUrl: spotifyImageUrl(m.image_url) },
@@ -600,7 +549,7 @@
       const sources = t.albumOfTrack?.coverArt?.sources ?? [];
       out.push({
         uri: t.uri,
-        id: t.id ?? idOf2(t.uri),
+        id: t.id ?? idOf(t.uri),
         name: t.name ?? "",
         artists: (t.artists?.items ?? []).map((a) => ({ uri: a?.uri ?? "", name: a?.profile?.name ?? "" })),
         album: { name: t.albumOfTrack?.name ?? "", imageUrl: sources[0]?.url },
@@ -620,7 +569,7 @@
       const images = i.album?.images ?? [];
       out.push({
         uri: i.uri,
-        id: idOf2(i.uri),
+        id: idOf(i.uri),
         name: i.name ?? "",
         artists: (i.artists ?? []).map((a) => ({ uri: a?.uri ?? "", name: a?.name ?? "" })),
         album: { name: i.album?.name ?? "", imageUrl: spotifyImageUrl(images[0]?.url) },
@@ -644,14 +593,28 @@
   var AVOID_FRACTION = 0.5;
   var cursors = /* @__PURE__ */ new Map();
   var history = /* @__PURE__ */ new Map();
-  var shuffleNext = /* @__PURE__ */ new Set();
+  var seenSaved = /* @__PURE__ */ new Map();
+  var SEEN_KEY = "crate-digger:shown:";
+  var SEEN_MAX = 500;
+  function savedSeen(playlistUri) {
+    let s2 = seenSaved.get(playlistUri);
+    if (!s2) {
+      s2 = [];
+      try {
+        const raw = JSON.parse(Spicetify.LocalStorage.get(SEEN_KEY + playlistUri) ?? "[]");
+        if (Array.isArray(raw)) s2 = raw.filter(isTrackUri);
+      } catch {
+      }
+      seenSaved.set(playlistUri, s2);
+    }
+    return s2;
+  }
   function cursorOf(playlistUri) {
     let c = cursors.get(playlistUri);
     if (!c) {
-      const shuffled = shuffleNext.delete(playlistUri);
-      const shown = [...history.get(playlistUri) ?? []];
-      const avoid = new Set(shuffled ? shuffle(shown).slice(0, Math.round(shown.length * AVOID_FRACTION)) : []);
-      c = { shuffled, avoid, autoplaySeen: [...avoid].map(idOf2), autoplayDone: false, related: null, discovered: null };
+      const shown = [.../* @__PURE__ */ new Set([...savedSeen(playlistUri), ...history.get(playlistUri) ?? []])];
+      const avoid = new Set(shuffle(shown).slice(0, Math.round(shown.length * AVOID_FRACTION)));
+      c = { shuffled: true, avoid, autoplaySeen: [...avoid].map(idOf), autoplayDone: false, related: null, discovered: null };
       cursors.set(playlistUri, c);
     }
     return c;
@@ -661,12 +624,24 @@
     if (!h) history.set(playlistUri, h = /* @__PURE__ */ new Set());
     uris.forEach((u) => h.add(u));
   }
+  function rememberSeen(playlistUri, uris) {
+    const fresh = new Set(uris);
+    const next = [...savedSeen(playlistUri).filter((u) => !fresh.has(u)), ...fresh].slice(-SEEN_MAX);
+    seenSaved.set(playlistUri, next);
+    try {
+      Spicetify.LocalStorage.set(SEEN_KEY + playlistUri, JSON.stringify(next));
+    } catch {
+    }
+  }
   function avoidSet(playlistUri) {
     return cursorOf(playlistUri).avoid;
   }
   function resetExtras(playlistUri) {
     cursors.delete(playlistUri);
-    shuffleNext.add(playlistUri);
+    boostUsed.delete(playlistUri);
+  }
+  function seedsWithPriority(priority, seeds, n) {
+    return [.../* @__PURE__ */ new Set([...priority, ...seeds])].slice(0, n);
   }
   async function pool(items, fn) {
     const queue = [...items];
@@ -747,10 +722,10 @@
     const c = cursors.get(playlistUri);
     return !!c && c.autoplayDone && c.related?.length === 0 && c.discovered?.length === 0;
   }
-  async function fetchExtras(playlistUri, excludeArtists) {
+  async function fetchExtras(playlistUri, excludeArtists, priorityArtists = []) {
     const c = cursorOf(playlistUri);
     const ranked = await rankedPlaylistArtists(playlistUri).catch(() => []);
-    const seeds = pickSeeds(ranked, SEED_ARTISTS, c.shuffled);
+    const seeds = seedsWithPriority(priorityArtists, pickSeeds(ranked, SEED_ARTISTS, c.shuffled), SEED_ARTISTS);
     const parts = await Promise.allSettled([
       autoplay(playlistUri, c),
       relatedTopTracks(seeds, excludeArtists, c),
@@ -761,6 +736,140 @@
       console.warn("[crate-digger] extra source failed", p.reason);
       return [];
     });
+  }
+  var BOOST_SEEDS_PER_LOAD = 3;
+  var BOOST_RADIO_COUNT = 50;
+  var BOOST_RELATED_PER_SEED = 3;
+  var BOOST_TOP_PER_ARTIST = 5;
+  var boostUsed = /* @__PURE__ */ new Map();
+  var usedOf = (playlistUri) => {
+    let u = boostUsed.get(playlistUri);
+    if (!u) boostUsed.set(playlistUri, u = /* @__PURE__ */ new Set());
+    return u;
+  };
+  function boostPending(playlistUri, addedUris) {
+    return newSeeds(addedUris, usedOf(playlistUri), 1).length > 0;
+  }
+  async function fetchBoost(playlistUri, added, excludeArtists) {
+    const used = usedOf(playlistUri);
+    const byUri = new Map(added.map((t) => [t.uri, t]));
+    const seeds = newSeeds(added.map((t) => t.uri), used, BOOST_SEEDS_PER_LOAD).map((u) => byUri.get(u));
+    seeds.forEach((t) => used.add(t.uri));
+    const G = Spicetify.GraphQL;
+    const parts = [];
+    for (const seed of seeds) {
+      const [radio, related] = await Promise.allSettled([
+        Spicetify.CosmosAsync.get(`${SPCLIENT}/radio-apollo/v3/stations/${seed.uri}?autoplay=false&count=${BOOST_RADIO_COUNT}`).then(parseAutoplay),
+        (async () => {
+          const artist = seed.artists[0]?.uri;
+          if (!artist) return [];
+          const rel = parseRelatedArtists(await G.Request(G.Definitions.queryArtistRelated, { uri: artist, locale: "" })).filter((a) => !excludeArtists.has(a)).slice(0, BOOST_RELATED_PER_SEED);
+          const tops = await pool(
+            rel,
+            async (a) => parseTopTracks(await G.Request(G.Definitions.queryArtistOverview, { uri: a, locale: "", includePrerelease: false })).slice(0, BOOST_TOP_PER_ARTIST)
+          );
+          return tops.flat();
+        })()
+      ]);
+      for (const p of [radio, related]) {
+        if (p.status === "fulfilled") parts.push(p.value);
+        else console.warn("[crate-digger] boost source failed", p.reason);
+      }
+    }
+    return parts.flat().filter((t) => !byUri.has(t.uri));
+  }
+
+  // src/domain/genreFit.ts
+  var FIT_PERCENTILE = 0.25;
+  function normalise(v) {
+    let n = 0;
+    v.forEach((x) => n += x * x);
+    n = Math.sqrt(n);
+    if (!n) return /* @__PURE__ */ new Map();
+    return new Map([...v].map(([k, x]) => [k, x / n]));
+  }
+  function buildProfile(lists) {
+    const sum = /* @__PURE__ */ new Map();
+    for (const list of lists) for (const g of list) sum.set(g.name, (sum.get(g.name) ?? 0) + g.score);
+    return normalise(sum);
+  }
+  function similarity(profile, genres2) {
+    if (!profile.size || !genres2?.length) return null;
+    const v = normalise(new Map(genres2.map((g) => [g.name, g.score])));
+    if (!v.size) return null;
+    let s2 = 0;
+    v.forEach((x, k) => s2 += x * (profile.get(k) ?? 0));
+    return s2;
+  }
+  function fitThreshold(profile, lists) {
+    const sims = lists.map((l) => similarity(profile, l)).filter((x) => x !== null).sort((a, b) => a - b);
+    if (!sims.length) return null;
+    return sims[Math.min(sims.length - 1, Math.floor(FIT_PERCENTILE * sims.length))];
+  }
+  function keepFitting(tracks, genresOf, profile, threshold) {
+    if (threshold === null) return tracks;
+    return tracks.filter((t) => (similarity(profile, genresOf(t.uri)) ?? -1) >= threshold);
+  }
+  function orderBySimilarity(tracks, genresOf, profile) {
+    return tracks.map((t, i) => ({ t, i, s: similarity(profile, genresOf(t.uri)) })).sort((a, b) => (b.s ?? -1) - (a.s ?? -1) || a.i - b.i).map((x) => x.t);
+  }
+
+  // src/api/recommendations.ts
+  var PER_ROUND = 50;
+  var PITCH = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  function standardKeyToPitch(k) {
+    const m = /^([A-G])([#♯b♭]?)$/.exec(k?.trim() ?? "");
+    if (!m) return void 0;
+    const shift = m[2] === "#" || m[2] === "\u266F" ? 1 : m[2] === "b" || m[2] === "\u266D" ? -1 : 0;
+    return (PITCH[m[1]] + shift + 12) % 12;
+  }
+  function parseRecommendations(raw) {
+    const tracks = [];
+    const v2Meta = /* @__PURE__ */ new Map();
+    for (const r of Array.isArray(raw) ? raw : []) {
+      if (!r?.uri?.startsWith("spotify:track:") || !r.id) continue;
+      tracks.push({
+        uri: r.uri,
+        id: r.id,
+        name: r.name ?? "",
+        artists: (r.artists ?? []).map((a) => ({ uri: a.uri ?? "", name: a.name ?? "" })),
+        album: { name: r.album?.name ?? "", imageUrl: r.album?.imageUrl },
+        durationMs: r.duration ?? 0
+      });
+      const meta = {};
+      if (typeof r.bpm === "number" && r.bpm > 0) meta.tempo = r.bpm;
+      const pitch = r.trackKey?.standardKey ? standardKeyToPitch(r.trackKey.standardKey) : void 0;
+      if (pitch !== void 0 && (r.trackKey?.mode === "major" || r.trackKey?.mode === "minor")) {
+        meta.key = pitch;
+        meta.mode = r.trackKey.mode === "major" ? 1 : 0;
+      }
+      if (Object.keys(meta).length) v2Meta.set(r.uri, meta);
+    }
+    return { tracks, v2Meta };
+  }
+  var idOf2 = (uri) => uri.split(":").pop();
+  async function fetchRecommendationBatch(playlistUri, exclude, rounds = 5, onV2Meta) {
+    const skip = new Set([...exclude].filter((u) => u.startsWith("spotify:track:")).map(idOf2));
+    const out = [];
+    for (let i = 0; i < rounds; i++) {
+      let raw;
+      try {
+        raw = await Spicetify.Platform.PlaylistAPI.getRecommendedTracks(playlistUri, [...skip], PER_ROUND, {
+          decorateWithBpmAndKey: true
+        });
+      } catch (e) {
+        if (i === 0) throw e;
+        console.warn("[crate-digger] recommendation round failed", e);
+        break;
+      }
+      const { tracks, v2Meta } = parseRecommendations(raw);
+      const fresh = tracks.filter((t) => !skip.has(t.id));
+      fresh.forEach((t) => skip.add(t.id));
+      out.push(...fresh);
+      if (v2Meta.size) onV2Meta?.(v2Meta);
+      if (fresh.length === 0) break;
+    }
+    return out;
   }
 
   // src/domain/concepts.ts
@@ -1047,6 +1156,7 @@
   // src/api/mixedBatch.ts
   var BASE_ROUNDS = 5;
   var MAX_EXTRA_PAGES = 3;
+  var BOOST_SHARE = 0.3;
   async function fetchMixedBatch(playlistUri, skip, ctx, onV2Meta) {
     const avoid = avoidSet(playlistUri);
     const baseSkip = avoid.size ? /* @__PURE__ */ new Set([...skip, ...avoid]) : skip;
@@ -1063,9 +1173,11 @@
     const playlistGenres = [...ctx.playlistTrackUris].map((u) => lookup(u) ?? []);
     const profile = buildProfile(playlistGenres);
     const threshold = fitThreshold(profile, playlistGenres);
+    const added = ctx.added ?? [];
+    const priorityArtists = [...new Set([...added].reverse().flatMap((t) => t.artists.map((a) => a.uri)).filter(Boolean))];
     const kept = [];
     for (let page = 0; page < MAX_EXTRA_PAGES; page++) {
-      const fresh = (await fetchExtras(playlistUri, exclude)).filter((t) => {
+      const fresh = (await fetchExtras(playlistUri, exclude, priorityArtists)).filter((t) => {
         if (taken.has(t.uri)) return false;
         taken.add(t.uri);
         return true;
@@ -1074,9 +1186,19 @@
       kept.push(...keepFitting(fresh, lookup, profile, threshold));
       if (baseTracks.length || kept.length || extrasExhausted(playlistUri)) break;
     }
+    let boosted = [];
+    if (added.length) {
+      const fresh = (await fetchBoost(playlistUri, added, exclude).catch(() => [])).filter((t) => {
+        if (taken.has(t.uri)) return false;
+        taken.add(t.uri);
+        return true;
+      });
+      lookup = await getGenres(fresh.map((t) => t.uri));
+      boosted = orderBySimilarity(keepFitting(fresh, lookup, profile, threshold), lookup, profile);
+    }
     const all = [...baseTracks, ...kept];
-    if (!all.length && !baseRes.ok) throw baseRes.error;
-    const ordered = orderBySimilarity(all, lookup, profile);
+    if (!all.length && !boosted.length && !baseRes.ok) throw baseRes.error;
+    const ordered = blend(orderBySimilarity(all, lookup, profile), boosted, BOOST_SHARE);
     recordShown(playlistUri, ordered.map((t) => t.uri));
     return ordered;
   }
@@ -1212,13 +1334,17 @@
     if (s2.visible > 0) return null;
     if (s2.tracks > 0) return { title: "No track matches the filters" };
     if (s2.error) return { title: `Error: ${s2.error}` };
-    if (s2.library === "loading")
+    if (s2.library === "loading") {
+      const p = s2.libraryProgress;
+      const pct = p?.playlistsTotal ? ` ${Math.round(p.playlistsDone / p.playlistsTotal * 100)}%` : "";
       return {
-        title: "Reading your library\u2026",
-        detail: "This happens once after Spotify starts, so tracks you already have can be hidden."
+        title: `Reading your library\u2026${pct}`,
+        detail: "This happens once after Spotify starts, so tracks you already have can be hidden.",
+        busy: true
       };
+    }
     if (s2.exhausted) return { title: "No recommendations for this playlist" };
-    return { title: "Loading recommendations\u2026" };
+    return { title: "Loading recommendations\u2026", busy: true };
   }
 
   // src/domain/keys.ts
@@ -1471,6 +1597,7 @@
     try {
       await addTrack(playlistUri, trackUri);
       finishAdd(playlistUri, trackUri, true);
+      invalidateTimbreProfile(playlistUri);
     } catch (e) {
       console.error("[crate-digger] add failed", e);
       finishAdd(playlistUri, trackUri, false);
@@ -1914,10 +2041,19 @@
 \r
 .prr-empty-title { font-size: 16px; color: var(--spice-text); }\r
 .prr-empty-detail { margin-top: 6px; font-size: 13px; color: var(--spice-subtext); }\r
+\r
+.prr-spinner { width: 14px; height: 14px; flex: 0 0 auto; }\r
+.prr-empty-title { display: inline-flex; align-items: center; gap: 10px; }\r
+.prr-empty-title .prr-spinner { width: 18px; height: 18px; color: var(--text-bright-accent, #1ed760); }\r
+.prr-btn-busy { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }\r
+@media (prefers-reduced-motion: reduce) { .prr-spinner.prr-spin { animation-duration: 2.5s; } }\r
 `;
   document.head.appendChild(s);
 
   // src/ui/RecommenderModal.tsx
+  function Spinner() {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { className: "prr-spinner prr-spin", viewBox: "0 0 16 16", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("circle", { cx: "8", cy: "8", r: "6", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeDasharray: "26 12", strokeLinecap: "round" }));
+  }
   var ROW_HEIGHT = 52;
   var HEADER_HEIGHT = 34;
   var OVERSCAN = 10;
@@ -2028,10 +2164,12 @@
       loading: s2.loading,
       exhausted: s2.exhausted,
       error: s2.error,
-      library: library.status
+      library: library.status,
+      libraryProgress: library.progress
     });
+    const loadLabel = library.status === "loading" ? "Reading library\u2026" : s2.digProgress ? `Loading\u2026 ${Math.min(s2.digProgress.found, s2.digProgress.target)} / ${s2.digProgress.target}` : "Loading\u2026";
     const libraryNote = library.status === "loading" ? " \xB7 reading your library\u2026" : library.status === "error" ? " \xB7 couldn't read your library" : "";
-    return /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-root" }, !s2.editable && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-warning" }, "Read-only: you can't add tracks to this playlist"), /* @__PURE__ */ Spicetify.React.createElement(FiltersBar, { uri, filters: s2.filters }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-counter" }, visible.length, " shown / ", available, " loaded", libraryNote), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar-actions" }, /* @__PURE__ */ Spicetify.React.createElement(ShortcutsMenu, { enabled: shortcutsOn }), /* @__PURE__ */ Spicetify.React.createElement(ColumnsMenu, { visible: columnIds, keyNotation }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-list", ref: listRef }, empty2 && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty-title" }, empty2.title), empty2.detail && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty-detail" }, empty2.detail)), visible.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("table", { className: "prr-table", style: { width: widths.reduce((a, b) => a + b, 0) } }, /* @__PURE__ */ Spicetify.React.createElement("colgroup", null, /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[0] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[1] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[2] } }), columns2.map((c, i) => /* @__PURE__ */ Spicetify.React.createElement("col", { key: c.id, style: { width: widths[3 + i] } }))), /* @__PURE__ */ Spicetify.React.createElement("thead", null, /* @__PURE__ */ Spicetify.React.createElement("tr", null, /* @__PURE__ */ Spicetify.React.createElement("th", { "aria-label": "Add" }), /* @__PURE__ */ Spicetify.React.createElement("th", { colSpan: 2 }, "Title"), columns2.map((c) => /* @__PURE__ */ Spicetify.React.createElement("th", { key: c.id, className: c.numeric ? "prr-num" : void 0 }, c.id === "key" ? (
+    return /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-root" }, !s2.editable && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-warning" }, "Read-only: you can't add tracks to this playlist"), /* @__PURE__ */ Spicetify.React.createElement(FiltersBar, { uri, filters: s2.filters }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-counter" }, visible.length, " shown / ", available, " loaded", libraryNote), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-toolbar-actions" }, /* @__PURE__ */ Spicetify.React.createElement(ShortcutsMenu, { enabled: shortcutsOn }), /* @__PURE__ */ Spicetify.React.createElement(ColumnsMenu, { visible: columnIds, keyNotation }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-list", ref: listRef }, empty2 && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty-title" }, empty2.busy && /* @__PURE__ */ Spicetify.React.createElement(Spinner, null), empty2.title), empty2.detail && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "prr-empty-detail" }, empty2.detail)), visible.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("table", { className: "prr-table", style: { width: widths.reduce((a, b) => a + b, 0) } }, /* @__PURE__ */ Spicetify.React.createElement("colgroup", null, /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[0] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[1] } }), /* @__PURE__ */ Spicetify.React.createElement("col", { style: { width: widths[2] } }), columns2.map((c, i) => /* @__PURE__ */ Spicetify.React.createElement("col", { key: c.id, style: { width: widths[3 + i] } }))), /* @__PURE__ */ Spicetify.React.createElement("thead", null, /* @__PURE__ */ Spicetify.React.createElement("tr", null, /* @__PURE__ */ Spicetify.React.createElement("th", { "aria-label": "Add" }), /* @__PURE__ */ Spicetify.React.createElement("th", { colSpan: 2 }, "Title"), columns2.map((c) => /* @__PURE__ */ Spicetify.React.createElement("th", { key: c.id, className: c.numeric ? "prr-num" : void 0 }, c.id === "key" ? (
       // Click to switch notation (Musical → Camelot → Open Key)
       /* @__PURE__ */ Spicetify.React.createElement("button", { className: "prr-th-btn", title: "Click to change the key notation", onClick: cycleKeyNotation }, "Key \xB7 ", KEY_NOTATIONS.find((n) => n.id === keyNotation)?.label)
     ) : c.label)))), /* @__PURE__ */ Spicetify.React.createElement("tbody", null, range.start > 0 && /* @__PURE__ */ Spicetify.React.createElement("tr", { className: "prr-spacer", "aria-hidden": "true", style: { height: range.start * ROW_HEIGHT } }, /* @__PURE__ */ Spicetify.React.createElement("td", { colSpan: widths.length })), visible.slice(range.start, range.end).map((t) => /* @__PURE__ */ Spicetify.React.createElement(
@@ -2063,7 +2201,7 @@
         }
       },
       "Restart"
-    ), /* @__PURE__ */ Spicetify.React.createElement("button", { className: "prr-btn", disabled: busy || s2.exhausted, onClick: () => void startLoad(uri) }, busy ? "Loading\u2026" : s2.exhausted ? "No more tracks" : "Load more")));
+    ), /* @__PURE__ */ Spicetify.React.createElement("button", { className: "prr-btn", disabled: busy || s2.exhausted, onClick: () => void startLoad(uri) }, busy ? /* @__PURE__ */ Spicetify.React.createElement("span", { className: "prr-btn-busy" }, /* @__PURE__ */ Spicetify.React.createElement(Spinner, null), loadLabel) : s2.exhausted ? "No more tracks" : "Load more")));
   }
 
   // src/ui/openRecommender.tsx
@@ -2089,29 +2227,42 @@
     const wanted = new Set(candidates.map((t) => t.uri));
     return shown.filter((t) => wanted.has(t.uri));
   }
+  function addedTracks(uri) {
+    const s2 = getSession(uri);
+    if (!s2) return [];
+    const byUri = new Map(s2.tracks.map((t) => [t.uri, t]));
+    return [...s2.added].map((u) => byUri.get(u)).filter((t) => !!t);
+  }
+  function profileUris(uri) {
+    const s2 = getSession(uri);
+    return [.../* @__PURE__ */ new Set([...[...s2?.added ?? []].reverse(), ...s2?.playlistTrackUris ?? []])];
+  }
   async function startLoad(uri) {
     const onV2Meta = (m) => {
       primeV2Meta(m);
       mergeMeta(uri, m);
     };
     try {
-      warmTimbreProfile(uri, { fingerprints: getFingerprints, playlistTrackUris: [...getSession(uri)?.playlistTrackUris ?? []] });
+      warmTimbreProfile(uri, { fingerprints: getFingerprints, playlistTrackUris: profileUris(uri) });
       await ensureLibrary(loadLibraryData);
       await loadProgressive(
         uri,
         ({ append, seen }) => digMore(uri, {
           ...DIG_DEFAULTS,
-          playlistTrackUris: [...getSession(uri)?.playlistTrackUris ?? []],
+          playlistTrackUris: profileUris(uri),
+          boostPending: () => boostPending(uri, [...getSession(uri)?.added ?? []]),
+          onProgress: (found, target) => updateSession(uri, { digProgress: { found, target } }),
           fetchCandidates: (skip) => fetchMixedBatch(
             uri,
             skip,
-            { playlistTrackUris: getSession(uri)?.playlistTrackUris ?? /* @__PURE__ */ new Set(), excludeArtists: () => excludedArtists(uri) },
+            { playlistTrackUris: new Set(profileUris(uri)), added: addedTracks(uri), excludeArtists: () => excludedArtists(uri) },
             onV2Meta
           ),
           fingerprints: getFingerprints,
           visible: (candidates) => visibleWithFilters(uri, candidates),
           append: (tracks) => {
             const fresh = append(tracks);
+            if (fresh.length) rememberSeen(uri, fresh.map((t) => t.uri));
             if (fresh.length) void getTrackMeta(fresh.map((t) => t.uri), (partial) => mergeMeta(uri, partial));
           },
           shownUris: seen
@@ -2189,14 +2340,17 @@
     else openForCurrentPlaylist();
   }
   async function main() {
+    var _a, _b;
     await waitForSpicetify();
     registerShortcut(toggleRecommender);
     registerActionBarButton(openForCurrentPlaylist);
     if (Spicetify.ContextMenu?.Item) {
+      (_a = Spicetify.SVGIcons)[_b = CONTEXT_MENU_ICON_NAME] ?? (_a[_b] = CONTEXT_MENU_ICON);
       new Spicetify.ContextMenu.Item(
         LABEL2,
         ([uri]) => void openRecommender(uri),
-        (uris) => uris.length === 1 && Spicetify.URI.isPlaylistV1OrV2(uris[0])
+        (uris) => uris.length === 1 && Spicetify.URI.isPlaylistV1OrV2(uris[0]),
+        CONTEXT_MENU_ICON_NAME
       ).register();
     } else {
       console.warn("[crate-digger] Spicetify.ContextMenu.Item not available");
